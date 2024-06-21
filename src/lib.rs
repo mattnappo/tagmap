@@ -1,113 +1,88 @@
-//! Format:
-//! Each enum has this structure:
-//!
-//! ```c
-//! struct Enum {
-//!     enum EnumTag variant;
-//!     union { ... };
-//! };
-//! ```
-//!
-//! # Mapping
-//! ## Unit variant
-//! Units will have type `typedef empty uint8_t` in the union. Naming scheme
-//! is below.
-//!
-//! ## Struct variant
-//! Create an anon struct in the union, where the fields in
-//! the struct are named in accordance to the struct variant names.
-//!
-//! ## Tuple variant
-//! Create anon struct in the union where the fields in the
-//! struct are labeled t_0, t_1, ...
-//!
-//! # Naming
-//! A variant named `EnumVariant` will have the name `enum_variant` in the union
+use std::fs;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
-/// A simple, c-style enum where each variant <-> an int.
-/// So really this is the same thing as
-/// ```
-/// enum Simple {
-///     A(i32),
-///     B(i32),
-///     C(i32)
-/// }
-/// ```
-///
-/// ```c
-/// typedef int empty;
-/// enum SimpleTag {A, B, C};
-/// struct Simple {
-///     enum SimpleTag variant;
-///     union {
-///         empty a;
-///         empty b;
-///         empty c;
-///     };
-/// };
-///
-/// ```
-pub enum Simple {
-    A,
-    B,
-    C,
+use anyhow::Result;
+use syn::*;
+
+pub mod examples;
+
+pub fn convert(src: &str, dest: &str) -> Result<()> {
+    // Parse the file
+    let mut fd = fs::File::open(src)?;
+    let mut file = String::new();
+    fd.read_to_string(&mut file)?;
+    let file = syn::parse_file(&file)?;
+
+    // Get all the enums
+    let enums = file
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Enum(e) => Some(e),
+            _ => None,
+        })
+        .collect::<Vec<ItemEnum>>();
+
+    let enum_ = enums[0].clone();
+
+    // First, convert each variant of the enum accordingly
+    // TODO: eventually we will map over all enums
+    let enum_name = enum_.ident.to_string();
+    let c_variants = enum_.variants.into_iter().map(|v| {
+        let variant_name = v.ident.to_string();
+        let c_code = match v.fields {
+            Fields::Unnamed(f) => handle_unnamed(&f),
+            Fields::Named(f) => handle_named(&f),
+            Fields::Unit => handle_unit(),
+        };
+
+        // Make this return string of (variant type variant name)
+        (variant_name, c_code)
+    });
+
+    // Now make the tag
+    let variants = c_variants
+        .map(|(name, _)| format!("{}_{}", enum_name.to_uppercase(), name.to_uppercase()))
+        .collect::<Vec<String>>()
+        .join(",");
+
+    let tag = format!("enum {}Tag {{ {} }};", enum_name, variants);
+
+    // Write to file
+    let mut outfile = fs::File::open(dest)?;
+
+    let code = format!(
+        "
+        #include <stdint.h>
+        typedef empty uint8_t;
+
+        {tag}
+
+        struct {enum_name} {{
+            enum {enum_name}Tag variant;
+            union {{
+                {variant_type} {variant_name};
+            }};
+        }}
+        ",
+    );
+
+    outfile.write_all(code.as_bytes())?;
 }
 
-/// A simple sum type.
-///
-/// ```c
-/// enum SumTag {
-///     SUM_A,
-///     SUM_B,
-/// };
-/// struct Sum {
-///     enum SumTag variant;
-///     union {
-///         char *a;
-///         int b;
-///     };
-/// };
-/// ```
-pub enum Sum {
-    A(String),
-    B(i32),
+fn handle_unnamed(fields: &FieldsUnnamed) -> Vec<String> {
+    todo!()
+}
+fn handle_named(fields: &FieldsNamed) -> Vec<String> {
+    todo!()
+}
+fn handle_unit() -> Vec<String> {
+    todo!()
 }
 
-/// Unnamed use temps (they're still named).
-///
-/// ```c
-/// struct Unnamed {
-///     enum UnnamedTag variant;
-///     union {
-///         struct {
-///             char *t_0;
-///             int   t_1;
-///         } a;
-///         long long b;
-///     };
-/// }
-/// ```
-pub enum Unnamed {
-    A(String, i32),
-    B(u128),
-}
-
-/// A slightly more complicated sum type. The only difference between named
-/// and unnamed is that unnamed uses temp values (t_0, t_1, ...)
-///
-/// ```c
-/// struct Named {
-///     enum NamedTag variant;
-///     union {
-///         struct {
-///             char *x;
-///             int y;
-///         } a;
-///         empty b;
-///     };
-/// };
-/// ```
-pub enum Named {
-    A { x: String, y: i32 },
-    B,
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_() {}
 }
