@@ -1,13 +1,35 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
+use anyhow::bail;
 use anyhow::Result;
 use syn::*;
 
 pub mod examples;
 
-pub fn convert(src: &str, dest: &str) -> Result<()> {
+const TYPE_MAP: &[(&str, &str)] = &[
+    ("String", "char*"),
+    ("i8", "int8_t"),
+    ("i16", "int16_t"),
+    ("i32", "int32_t"),
+    ("i64", "int64_t"),
+    ("i128", "i128"),
+    ("isize", "isize_t"),
+    ("u8", "uint8_t"),
+    ("u16", "uint16_t"),
+    ("u32", "uint32_t"),
+    ("u64", "uint64_t"),
+    ("u128", "u128"),
+    ("usize", "size_t"),
+    ("f32", "float"),
+    ("f64", "double"),
+    ("char", "char"),
+    ("bool", "bool"),
+];
+
+pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
     // Parse the file
     let mut fd = fs::File::open(src)?;
     let mut file = String::new();
@@ -29,60 +51,119 @@ pub fn convert(src: &str, dest: &str) -> Result<()> {
     // First, convert each variant of the enum accordingly
     // TODO: eventually we will map over all enums
     let enum_name = enum_.ident.to_string();
-    let c_variants = enum_.variants.into_iter().map(|v| {
+    let variants = enum_.variants.into_iter().map(|v| {
         let variant_name = v.ident.to_string();
-        let c_code = match v.fields {
+        // This is a vector of strings of the form
+        // "{variant c type} {variant name};"
+        // So these can just be shoved into a union
+        let c_code: String = match v.fields {
             Fields::Unnamed(f) => handle_unnamed(&f),
             Fields::Named(f) => handle_named(&f),
             Fields::Unit => handle_unit(),
         };
 
-        // Make this return string of (variant type variant name)
         (variant_name, c_code)
     });
 
     // Now make the tag
-    let variants = c_variants
+    let tag_variants = variants
+        .clone()
         .map(|(name, _)| format!("{}_{}", enum_name.to_uppercase(), name.to_uppercase()))
         .collect::<Vec<String>>()
         .join(",");
 
-    let tag = format!("enum {}Tag {{ {} }};", enum_name, variants);
+    let c_code = variants
+        .map(|(_, code)| code)
+        .collect::<Vec<String>>()
+        .join("\n");
 
-    // Write to file
-    let mut outfile = fs::File::open(dest)?;
+    let tag = format!("enum {}Tag {{ {} }};", enum_name, tag_variants);
 
+    // Final C code output
     let code = format!(
         "
         #include <stdint.h>
-        typedef empty uint8_t;
+        #include <stdbool.h>
+        typedef uint8_t empty;
 
         {tag}
 
         struct {enum_name} {{
             enum {enum_name}Tag variant;
             union {{
-                {variant_type} {variant_name};
+                {}
             }};
-        }}
+        }};
         ",
+        c_code
     );
 
-    outfile.write_all(code.as_bytes())?;
+    // Write to file
+    if let Some(path) = dest {
+        let mut outfile = fs::File::create(path)?;
+        outfile.write_all(code.as_bytes())?;
+    }
+
+    Ok(code)
 }
 
-fn handle_unnamed(fields: &FieldsUnnamed) -> Vec<String> {
-    todo!()
+fn handle_unnamed(fields: &FieldsUnnamed) -> String {
+    todo!("unnamed variant")
 }
-fn handle_named(fields: &FieldsNamed) -> Vec<String> {
-    todo!()
+
+fn handle_named(fields: &FieldsNamed) -> String {
+    let map = HashMap::<&str, &str>::from_iter(TYPE_MAP.to_owned());
+    fields
+        .named
+        .clone()
+        .into_iter()
+        .map(|f| {
+            let ty = match f.ty {
+                Type::Path(TypePath { path, .. }) => path
+                    .segments
+                    .into_iter()
+                    .map(|seg| seg.ident.to_string())
+                    .collect::<String>(),
+                _ => unimplemented!("ty: {:?}", f.ty),
+            };
+
+            let mapped_ty = match map.get(&*ty) {
+                Some(t) => t.to_string(),
+                None => panic!("Rust type {} cannot be mapped to a C type", ty),
+            };
+            let ident = f.ident.unwrap().to_string();
+            format!("{} {};", mapped_ty, ident)
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
 }
-fn handle_unit() -> Vec<String> {
-    todo!()
+
+fn handle_unit() -> String {
+    todo!("unit variant")
 }
 
 #[cfg(test)]
 mod test {
+    use super::*;
+
+    /*
+    macro_rules! test (
+        ($n:literal) => {
+            let c = convert(format!("examples/{n:02}.rs"), "").unwrap();
+            println!("{c}");
+        }
+    );
+    */
+
     #[test]
-    fn test_() {}
+    fn test_ex01() {
+        let c = convert("examples/01.rs", None).unwrap();
+        println!("{c}");
+    }
+
+    #[test]
+    fn test_ex05() {
+        let c = convert("examples/05.rs", Some("/home/matt/.tmp/f.c")).unwrap();
+        println!("{c}");
+    }
 }
