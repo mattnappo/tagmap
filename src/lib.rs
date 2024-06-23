@@ -57,8 +57,8 @@ pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
         // "{variant c type} {variant name};"
         // So these can just be shoved into a union
         let c_code: String = match v.fields {
-            Fields::Unnamed(f) => handle_unnamed(&f),
-            Fields::Named(f) => handle_named(&f),
+            Fields::Unnamed(f) => handle_unnamed(&f, &variant_name),
+            Fields::Named(f) => handle_named(&f, &variant_name),
             Fields::Unit => format!("empty {};", variant_name.to_lowercase()),
         };
 
@@ -107,11 +107,42 @@ pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
     Ok(code)
 }
 
-fn handle_unnamed(fields: &FieldsUnnamed) -> String {
-    todo!("unnamed variant")
+fn handle_unnamed(fields: &FieldsUnnamed, variant_name: &str) -> String {
+    let map = HashMap::<&str, &str>::from_iter(TYPE_MAP.to_owned());
+    let c_fields = fields
+        .unnamed
+        .clone()
+        .into_iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let ty = match f.ty {
+                Type::Path(TypePath { path, .. }) => path
+                    .segments
+                    .into_iter()
+                    .map(|seg| seg.ident.to_string())
+                    .collect::<String>(),
+                _ => unimplemented!("ty: {:?}", f.ty),
+            };
+
+            let mapped_ty = match map.get(&*ty) {
+                Some(t) => t.to_string(),
+                None => panic!("Rust type {} cannot be mapped to a C type", ty),
+            };
+            format!("{} t_{i};", mapped_ty)
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    format!(
+        "
+        struct {{
+            {c_fields}
+        }} {};",
+        variant_name.to_lowercase()
+    )
 }
 
-fn handle_named(fields: &FieldsNamed) -> String {
+fn handle_named(fields: &FieldsNamed, variant_name: &str) -> String {
     let map = HashMap::<&str, &str>::from_iter(TYPE_MAP.to_owned());
     let c_fields = fields
         .named
@@ -141,7 +172,8 @@ fn handle_named(fields: &FieldsNamed) -> String {
         "
         struct {{
             {c_fields}
-        }};"
+        }} {};",
+        variant_name.to_lowercase()
     )
 }
 
