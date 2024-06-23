@@ -7,8 +7,6 @@ use lazy_static::lazy_static;
 use syn::*;
 use tempfile::NamedTempFile;
 
-pub mod examples;
-
 lazy_static! {
     static ref TYPE_MAP: HashMap<String, String> = HashMap::from_iter(
         [
@@ -23,7 +21,7 @@ lazy_static! {
             ("u16", "uint16_t"),
             ("u32", "uint32_t"),
             ("u64", "uint64_t"),
-            ("u128", "u128"),
+            ("u128", "long long"),
             ("usize", "size_t"),
             ("f32", "float"),
             ("f64", "double"),
@@ -35,7 +33,7 @@ lazy_static! {
     );
 }
 
-pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
+pub fn convert(src: &str, dest: Option<&str>, format: bool) -> Result<String> {
     // Parse the file
     let mut fd = fs::File::open(src)?;
     let mut file = String::new();
@@ -87,8 +85,7 @@ pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
 
     // Final C code output
     let code = format!(
-        "
-        #include <stdint.h>
+        "#include <stdint.h>
         #include <stdbool.h>
         typedef uint8_t empty;
 
@@ -104,9 +101,12 @@ pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
     );
 
     // Write to file
+    let code = if format { format_code(&code)? } else { code };
     if let Some(path) = dest {
         let mut outfile = fs::File::create(path)?;
         outfile.write_all(code.as_bytes())?;
+    } else {
+        println!("{code}");
     }
 
     Ok(code)
