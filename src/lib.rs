@@ -1,33 +1,39 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
 
-use anyhow::bail;
 use anyhow::Result;
+use lazy_static::lazy_static;
 use syn::*;
+use tempfile::NamedTempFile;
 
 pub mod examples;
 
-const TYPE_MAP: &[(&str, &str)] = &[
-    ("String", "char*"),
-    ("i8", "int8_t"),
-    ("i16", "int16_t"),
-    ("i32", "int32_t"),
-    ("i64", "int64_t"),
-    ("i128", "i128"),
-    ("isize", "isize_t"),
-    ("u8", "uint8_t"),
-    ("u16", "uint16_t"),
-    ("u32", "uint32_t"),
-    ("u64", "uint64_t"),
-    ("u128", "u128"),
-    ("usize", "size_t"),
-    ("f32", "float"),
-    ("f64", "double"),
-    ("char", "char"),
-    ("bool", "bool"),
-];
+lazy_static! {
+    static ref TYPE_MAP: HashMap<String, String> = HashMap::from_iter(
+        [
+            ("String", "char*"),
+            ("i8", "int8_t"),
+            ("i16", "int16_t"),
+            ("i32", "int32_t"),
+            ("i64", "int64_t"),
+            ("i128", "i128"),
+            ("isize", "isize_t"),
+            ("u8", "uint8_t"),
+            ("u16", "uint16_t"),
+            ("u32", "uint32_t"),
+            ("u64", "uint64_t"),
+            ("u128", "u128"),
+            ("usize", "size_t"),
+            ("f32", "float"),
+            ("f64", "double"),
+            ("char", "char"),
+            ("bool", "bool"),
+        ]
+        .into_iter()
+        .map(|(x, y)| (x.to_string(), y.to_string()))
+    );
+}
 
 pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
     // Parse the file
@@ -90,8 +96,7 @@ pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
 
         struct {enum_name} {{
             enum {enum_name}Tag variant;
-            union {{
-                {}
+            union {{ {}
             }};
         }};
         ",
@@ -107,32 +112,34 @@ pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
     Ok(code)
 }
 
+fn get_type(ty: &Type) -> String {
+    let ty = match ty {
+        Type::Path(TypePath { path, .. }) => path
+            .clone()
+            .segments
+            .into_iter()
+            .map(|seg| seg.ident.to_string())
+            .collect::<String>(),
+        _ => unimplemented!("ty: {:?}", ty),
+    };
+    match TYPE_MAP.get(&*ty) {
+        Some(t) => t.to_string(),
+        None => panic!("Rust type '{}' cannot be mapped to a C type", ty),
+    }
+}
+
 fn handle_unnamed(fields: &FieldsUnnamed, variant_name: &str) -> String {
-    let map = HashMap::<&str, &str>::from_iter(TYPE_MAP.to_owned());
     let c_fields = fields
         .unnamed
         .clone()
         .into_iter()
         .enumerate()
         .map(|(i, f)| {
-            let ty = match f.ty {
-                Type::Path(TypePath { path, .. }) => path
-                    .segments
-                    .into_iter()
-                    .map(|seg| seg.ident.to_string())
-                    .collect::<String>(),
-                _ => unimplemented!("ty: {:?}", f.ty),
-            };
-
-            let mapped_ty = match map.get(&*ty) {
-                Some(t) => t.to_string(),
-                None => panic!("Rust type {} cannot be mapped to a C type", ty),
-            };
-            format!("{} t_{i};", mapped_ty)
+            let ty = get_type(&f.ty);
+            format!("{} t_{i};", ty)
         })
         .collect::<Vec<String>>()
         .join("\n");
-
     format!(
         "
         struct {{
@@ -143,27 +150,14 @@ fn handle_unnamed(fields: &FieldsUnnamed, variant_name: &str) -> String {
 }
 
 fn handle_named(fields: &FieldsNamed, variant_name: &str) -> String {
-    let map = HashMap::<&str, &str>::from_iter(TYPE_MAP.to_owned());
     let c_fields = fields
         .named
         .clone()
         .into_iter()
         .map(|f| {
-            let ty = match f.ty {
-                Type::Path(TypePath { path, .. }) => path
-                    .segments
-                    .into_iter()
-                    .map(|seg| seg.ident.to_string())
-                    .collect::<String>(),
-                _ => unimplemented!("ty: {:?}", f.ty),
-            };
-
-            let mapped_ty = match map.get(&*ty) {
-                Some(t) => t.to_string(),
-                None => panic!("Rust type {} cannot be mapped to a C type", ty),
-            };
+            let ty = get_type(&f.ty);
             let ident = f.ident.unwrap().to_string();
-            format!("{} {};", mapped_ty, ident)
+            format!("{} {};", ty, ident)
         })
         .collect::<Vec<String>>()
         .join("\n");
@@ -177,28 +171,45 @@ fn handle_named(fields: &FieldsNamed, variant_name: &str) -> String {
     )
 }
 
+fn format_code(s: &str) -> Result<String> {
+    let mut inf = NamedTempFile::new()?;
+    let mut outf = NamedTempFile::new()?;
+    inf.write_all(s.as_bytes())?;
+
+    std::process::Command::new("indent")
+        .args([
+            inf.path().display().to_string(),
+            "-o".into(),
+            outf.path().display().to_string(),
+        ])
+        .output()?;
+
+    let mut formatted = String::new();
+    outf.read_to_string(&mut formatted)?;
+    Ok(formatted)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use paste::paste;
 
-    /*
     macro_rules! test (
         ($n:literal) => {
-            let c = convert(format!("examples/{n:02}.rs"), "").unwrap();
-            println!("{c}");
+            paste! {
+                #[test]
+                fn [< test_ $n >] () {
+                    let c = convert(&format!("examples/{:02}.rs", $n), None).unwrap();
+                    println!("{}", format_code(&c).unwrap());
+                }
+            }
         }
     );
-    */
 
-    #[test]
-    fn test_ex01() {
-        let c = convert("examples/01.rs", None).unwrap();
-        println!("{c}");
-    }
-
-    #[test]
-    fn test_ex05() {
-        let c = convert("examples/05.rs", Some("/home/matt/.tmp/f.c")).unwrap();
-        println!("{c}");
-    }
+    test!(1);
+    test!(2);
+    test!(3);
+    test!(4);
+    test!(5);
+    test!(6);
 }
