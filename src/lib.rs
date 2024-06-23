@@ -59,7 +59,7 @@ pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
         let c_code: String = match v.fields {
             Fields::Unnamed(f) => handle_unnamed(&f),
             Fields::Named(f) => handle_named(&f),
-            Fields::Unit => handle_unit(),
+            Fields::Unit => format!("empty {};", variant_name.to_lowercase()),
         };
 
         (variant_name, c_code)
@@ -70,7 +70,7 @@ pub fn convert(src: &str, dest: Option<&str>) -> Result<String> {
         .clone()
         .map(|(name, _)| format!("{}_{}", enum_name.to_uppercase(), name.to_uppercase()))
         .collect::<Vec<String>>()
-        .join(",");
+        .join(", ");
 
     let c_code = variants
         .map(|(_, code)| code)
@@ -113,7 +113,7 @@ fn handle_unnamed(fields: &FieldsUnnamed) -> String {
 
 fn handle_named(fields: &FieldsNamed) -> String {
     let map = HashMap::<&str, &str>::from_iter(TYPE_MAP.to_owned());
-    fields
+    let c_fields = fields
         .named
         .clone()
         .into_iter()
@@ -135,11 +135,14 @@ fn handle_named(fields: &FieldsNamed) -> String {
             format!("{} {};", mapped_ty, ident)
         })
         .collect::<Vec<String>>()
-        .join("\n")
-}
+        .join("\n");
 
-fn handle_unit() -> String {
-    todo!("unit variant")
+    format!(
+        "
+        struct {{
+            {c_fields}
+        }};"
+    )
 }
 
 #[cfg(test)]
